@@ -1,0 +1,491 @@
+import { useState, useEffect, useCallback } from "react";
+
+const API_BASE = "";
+
+const useServerData = () => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [sysRes, dockerRes] = await Promise.all([
+        fetch(`${API_BASE}/api/system`),
+        fetch(`${API_BASE}/api/docker`),
+      ]);
+      const sys = await sysRes.json();
+      const docker = await dockerRes.json();
+      setData({ system: sys, containers: docker });
+      setLastUpdated(new Date());
+      setError(null);
+    } catch (e) {
+      setError("Cannot connect to backend — showing demo data");
+      if (!data) {
+        setData(getMockData());
+        setLastUpdated(new Date());
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  return { data, loading, error, refetch: fetchData, lastUpdated };
+};
+
+const getMockData = () => ({
+  system: {
+    hostname: "homeserver",
+    uptime: 1234567,
+    cpu: { percent: 23, cores: 8, model: "Intel Core i7-9700K" },
+    ram: { total: 32 * 1024 ** 3, used: 14.2 * 1024 ** 3, free: 17.8 * 1024 ** 3 },
+    disks: [
+      { device: "/dev/sda1", mountpoint: "/", total: 500 * 1024 ** 3, used: 212 * 1024 ** 3, free: 288 * 1024 ** 3, percent: 42 },
+      { device: "/dev/sdb1", mountpoint: "/data", total: 2 * 1024 ** 4, used: 1.1 * 1024 ** 4, free: 0.9 * 1024 ** 4, percent: 55 },
+    ],
+    network: { rx_bytes: 15.4 * 1024 ** 3, tx_bytes: 3.2 * 1024 ** 3 },
+  },
+  containers: [
+    { id: "a1b2c3d4", name: "nginx-proxy", image: "nginx:alpine", status: "running", state: "running", cpu_percent: 0.3, mem_usage: 18 * 1024 ** 2, mem_limit: 256 * 1024 ** 2, ports: [{ host: 80, container: 80 }, { host: 443, container: 443 }], created: "2024-01-15", uptime: "12d 4h" },
+    { id: "e5f6g7h8", name: "plex", image: "plexinc/pms-docker:latest", status: "running", state: "running", cpu_percent: 12.4, mem_usage: 512 * 1024 ** 2, mem_limit: 2 * 1024 ** 3, ports: [{ host: 32400, container: 32400 }], created: "2024-01-10", uptime: "17d 2h" },
+    { id: "i9j0k1l2", name: "postgres", image: "postgres:15", status: "running", state: "running", cpu_percent: 1.8, mem_usage: 128 * 1024 ** 2, mem_limit: 512 * 1024 ** 2, ports: [{ host: 5432, container: 5432 }], created: "2024-01-08", uptime: "19d 6h" },
+    { id: "m3n4o5p6", name: "nextcloud", image: "nextcloud:latest", status: "exited", state: "exited", cpu_percent: 0, mem_usage: 0, mem_limit: 1 * 1024 ** 3, ports: [], created: "2024-01-05", uptime: "—" },
+    { id: "q7r8s9t0", name: "portainer", image: "portainer/portainer-ce:latest", status: "running", state: "running", cpu_percent: 0.1, mem_usage: 22 * 1024 ** 2, mem_limit: 128 * 1024 ** 2, ports: [{ host: 9000, container: 9000 }], created: "2024-01-01", uptime: "23d 1h" },
+    { id: "u1v2w3x4", name: "redis", image: "redis:7-alpine", status: "running", state: "running", cpu_percent: 0.05, mem_usage: 8 * 1024 ** 2, mem_limit: 64 * 1024 ** 2, ports: [{ host: 6379, container: 6379 }], created: "2024-01-12", uptime: "14d 8h" },
+  ],
+});
+
+const fmt = {
+  bytes: (b) => {
+    if (!b) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0, v = b;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  },
+  uptime: (s) => {
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  },
+  pct: (v) => `${Math.round(v)}%`,
+};
+
+const GaugeBar = ({ value, max, color = "var(--accent)" }) => {
+  const pct = Math.min(100, (value / max) * 100);
+  const clr = pct > 85 ? "#E24B4A" : pct > 65 ? "#EF9F27" : color;
+  return (
+    <div style={{ height: 6, background: "var(--color-border-tertiary)", borderRadius: 3, overflow: "hidden" }}>
+      <div style={{ height: "100%", width: `${pct}%`, background: clr, borderRadius: 3, transition: "width 0.6s ease" }} />
+    </div>
+  );
+};
+
+const Badge = ({ state }) => {
+  const cfg = {
+    running: { bg: "var(--color-background-success)", color: "var(--color-text-success)", label: "running" },
+    exited: { bg: "var(--color-background-danger)", color: "var(--color-text-danger)", label: "stopped" },
+    paused: { bg: "var(--color-background-warning)", color: "var(--color-text-warning)", label: "paused" },
+    restarting: { bg: "var(--color-background-warning)", color: "var(--color-text-warning)", label: "restarting" },
+  };
+  const c = cfg[state] || cfg.exited;
+  return (
+    <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: c.bg, color: c.color, fontWeight: 500 }}>
+      {c.label}
+    </span>
+  );
+};
+
+const ContainerCard = ({ c, onAction }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [actionLoading, setActionLoading] = useState(null);
+  const memPct = c.mem_limit ? (c.mem_usage / c.mem_limit) * 100 : 0;
+
+  const handleAction = async (action) => {
+    setActionLoading(action);
+    await onAction(c.id, action);
+    setActionLoading(null);
+  };
+
+  return (
+    <div style={{
+      background: "var(--color-background-primary)",
+      border: "0.5px solid var(--color-border-tertiary)",
+      borderRadius: "var(--border-radius-lg)",
+      padding: "1rem 1.25rem",
+      transition: "border-color 0.2s",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 15, fontWeight: 500, color: "var(--color-text-primary)" }}>{c.name}</span>
+            <Badge state={c.state} />
+          </div>
+          <div style={{ fontSize: 12, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {c.image}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          {c.state === "running" ? (
+            <>
+              <ActionBtn icon="ti-player-pause" label="Pause" onClick={() => handleAction("pause")} loading={actionLoading === "pause"} />
+              <ActionBtn icon="ti-square" label="Stop" onClick={() => handleAction("stop")} loading={actionLoading === "stop"} danger />
+              <ActionBtn icon="ti-refresh" label="Restart" onClick={() => handleAction("restart")} loading={actionLoading === "restart"} />
+            </>
+          ) : (
+            <ActionBtn icon="ti-player-play" label="Start" onClick={() => handleAction("start")} loading={actionLoading === "start"} success />
+          )}
+          <ActionBtn icon={expanded ? "ti-chevron-up" : "ti-chevron-down"} label="Details" onClick={() => setExpanded(v => !v)} />
+        </div>
+      </div>
+
+      {c.state === "running" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginTop: "0.75rem" }}>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>CPU</span>
+              <span style={{ fontSize: 12, fontWeight: 500 }}>{c.cpu_percent.toFixed(1)}%</span>
+            </div>
+            <GaugeBar value={c.cpu_percent} max={100} />
+          </div>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>RAM</span>
+              <span style={{ fontSize: 12, fontWeight: 500 }}>{fmt.bytes(c.mem_usage)}</span>
+            </div>
+            <GaugeBar value={c.mem_usage} max={c.mem_limit || 1} />
+          </div>
+        </div>
+      )}
+
+      {expanded && (
+        <div style={{ marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.25rem 1rem", fontSize: 12 }}>
+            <Row k="Container ID" v={c.id.slice(0, 12)} mono />
+            <Row k="Uptime" v={c.uptime} />
+            <Row k="Memory limit" v={fmt.bytes(c.mem_limit)} />
+            <Row k="Memory used" v={`${fmt.bytes(c.mem_usage)} (${Math.round(memPct)}%)`} />
+            <Row k="Created" v={c.created} />
+            {c.ports.length > 0 && (
+              <div style={{ gridColumn: "span 2" }}>
+                <span style={{ color: "var(--color-text-secondary)" }}>Ports</span>
+                <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                  {c.ports.map((p, i) => (
+                    <span key={i} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: "var(--color-background-info)", color: "var(--color-text-info)", fontFamily: "var(--font-mono)" }}>
+                      {p.host}:{p.container}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginTop: "0.75rem", borderTop: "0.5px solid var(--color-border-tertiary)", paddingTop: "0.75rem" }}>
+            <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 8, fontWeight: 500 }}>Quick actions</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <ActionBtnText icon="ti-terminal" label="Shell" onClick={() => handleAction("shell")} />
+              <ActionBtnText icon="ti-file-description" label="Logs" onClick={() => handleAction("logs")} />
+              <ActionBtnText icon="ti-info-circle" label="Inspect" onClick={() => handleAction("inspect")} />
+              <ActionBtnText icon="ti-trash" label="Remove" onClick={() => handleAction("remove")} danger disabled={c.state === "running"} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ActionBtn = ({ icon, label, onClick, loading, danger, success }) => (
+  <button
+    title={label}
+    onClick={onClick}
+    disabled={!!loading}
+    style={{
+      border: `0.5px solid ${danger ? "var(--color-border-danger)" : success ? "var(--color-border-success)" : "var(--color-border-secondary)"}`,
+      borderRadius: "var(--border-radius-md)",
+      background: "transparent",
+      padding: "5px 7px",
+      cursor: loading ? "wait" : "pointer",
+      color: danger ? "var(--color-text-danger)" : success ? "var(--color-text-success)" : "var(--color-text-secondary)",
+      opacity: loading ? 0.5 : 1,
+      display: "flex", alignItems: "center",
+    }}
+  >
+    <i className={`ti ${loading ? "ti-loader" : icon}`} style={{ fontSize: 15 }} aria-hidden="true" />
+  </button>
+);
+
+const ActionBtnText = ({ icon, label, onClick, danger, disabled }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    style={{
+      border: `0.5px solid ${danger ? "var(--color-border-danger)" : "var(--color-border-secondary)"}`,
+      borderRadius: "var(--border-radius-md)",
+      background: "transparent",
+      padding: "4px 10px",
+      cursor: disabled ? "not-allowed" : "pointer",
+      color: danger ? "var(--color-text-danger)" : "var(--color-text-secondary)",
+      display: "flex", alignItems: "center", gap: 5, fontSize: 12,
+      opacity: disabled ? 0.4 : 1,
+    }}
+  >
+    <i className={`ti ${icon}`} style={{ fontSize: 14 }} aria-hidden="true" /> {label}
+  </button>
+);
+
+const Row = ({ k, v, mono }) => (
+  <>
+    <span style={{ color: "var(--color-text-secondary)" }}>{k}</span>
+    <span style={{ fontFamily: mono ? "var(--font-mono)" : undefined, textAlign: "right" }}>{v}</span>
+  </>
+);
+
+const StatCard = ({ label, value, sub, icon, color }) => (
+  <div style={{
+    background: "var(--color-background-secondary)",
+    borderRadius: "var(--border-radius-md)",
+    padding: "1rem",
+    display: "flex", flexDirection: "column", gap: 4,
+  }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{label}</span>
+      <i className={`ti ${icon}`} style={{ fontSize: 16, color: color || "var(--color-text-secondary)" }} aria-hidden="true" />
+    </div>
+    <div style={{ fontSize: 22, fontWeight: 500, color: "var(--color-text-primary)" }}>{value}</div>
+    {sub && <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{sub}</div>}
+  </div>
+);
+
+const Modal = ({ title, content, onClose }) => (
+  <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={onClose}>
+    <div onClick={e => e.stopPropagation()} style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-lg)", padding: "1.5rem", maxWidth: 540, width: "90%", maxHeight: "70vh", overflow: "auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+        <span style={{ fontSize: 15, fontWeight: 500 }}>{title}</span>
+        <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--color-text-secondary)", padding: 4 }}><i className="ti ti-x" /></button>
+      </div>
+      <pre style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0 }}>{content}</pre>
+    </div>
+  </div>
+);
+
+export default function App() {
+  const { data, loading, error, refetch, lastUpdated } = useServerData();
+  const [tab, setTab] = useState("overview");
+  const [filter, setFilter] = useState("all");
+  const [modal, setModal] = useState(null);
+  const [search, setSearch] = useState("");
+
+  const handleAction = async (id, action) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/docker/${id}/${action}`, { method: "POST" });
+      const json = await res.json();
+      if (action === "logs") setModal({ title: `Logs — ${id.slice(0, 12)}`, content: json.logs });
+      else if (action === "inspect") setModal({ title: `Inspect — ${id.slice(0, 12)}`, content: JSON.stringify(json, null, 2) });
+      else if (action === "shell") setModal({ title: "Shell", content: `To open a shell, run:\n\ndocker exec -it ${id.slice(0, 12)} /bin/sh\n\n(or /bin/bash depending on the image)` });
+      else setTimeout(refetch, 1200);
+    } catch {
+      setModal({ title: "Demo mode", content: `Action "${action}" on container ${id.slice(0, 12)} — backend not connected.\n\nDeploy the backend to enable container control.` });
+    }
+  };
+
+  if (loading) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: "var(--color-text-secondary)", gap: 8 }}>
+      <i className="ti ti-loader" style={{ fontSize: 18 }} aria-hidden="true" />
+      <span>Connecting to server…</span>
+    </div>
+  );
+
+  const sys = data?.system;
+  const containers = data?.containers || [];
+  const filtered = containers.filter(c => {
+    if (filter === "running" && c.state !== "running") return false;
+    if (filter === "stopped" && c.state === "running") return false;
+    if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.image.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+  const running = containers.filter(c => c.state === "running").length;
+
+  return (
+    <div style={{ padding: "1rem 0", fontFamily: "var(--font-sans)" }}>
+      {modal && <Modal title={modal.title} content={modal.content} onClose={() => setModal(null)} />}
+
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1.5rem" }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 500 }}>
+            <i className="ti ti-server" style={{ fontSize: 18, marginRight: 8, verticalAlign: "-2px" }} aria-hidden="true" />
+            {sys?.hostname || "server"} dashboard
+          </h2>
+          <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 4 }}>
+            {error ? <span style={{ color: "var(--color-text-warning)" }}><i className="ti ti-alert-circle" style={{ fontSize: 13, marginRight: 4, verticalAlign: "-1px" }} />{error}</span>
+              : lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : ""}
+          </div>
+        </div>
+        <button onClick={refetch} style={{ border: "0.5px solid var(--color-border-secondary)", background: "transparent", borderRadius: "var(--border-radius-md)", padding: "6px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--color-text-secondary)" }}>
+          <i className="ti ti-refresh" style={{ fontSize: 14 }} aria-hidden="true" /> Refresh
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 4, marginBottom: "1.5rem", borderBottom: "0.5px solid var(--color-border-tertiary)", paddingBottom: "0.5rem" }}>
+        {["overview", "containers", "storage", "network"].map(t => (
+          <button key={t} onClick={() => setTab(t)} style={{
+            border: "none", background: tab === t ? "var(--color-background-secondary)" : "transparent",
+            borderRadius: "var(--border-radius-md)", padding: "6px 14px", cursor: "pointer",
+            fontSize: 13, fontWeight: tab === t ? 500 : 400,
+            color: tab === t ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+          }}>
+            {t.charAt(0).toUpperCase() + t.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Overview tab */}
+      {tab === "overview" && sys && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
+            <StatCard label="Uptime" value={fmt.uptime(sys.uptime)} icon="ti-clock" />
+            <StatCard label="CPU usage" value={fmt.pct(sys.cpu.percent)} icon="ti-cpu" color={sys.cpu.percent > 80 ? "var(--color-text-danger)" : "var(--color-text-success)"} />
+            <StatCard label="RAM used" value={fmt.bytes(sys.ram.used)} sub={`of ${fmt.bytes(sys.ram.total)}`} icon="ti-server" />
+            <StatCard label="Containers" value={`${running}/${containers.length}`} sub="running" icon="ti-brand-docker" color="var(--color-text-info)" />
+          </div>
+
+          <div style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: "0.75rem" }}>System resources</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              <ResourceRow label="CPU" value={sys.cpu.percent} max={100} sub={`${sys.cpu.cores} cores · ${sys.cpu.model}`} fmt={v => `${v.toFixed(1)}%`} />
+              <ResourceRow label="RAM" value={sys.ram.used} max={sys.ram.total} sub={`${fmt.bytes(sys.ram.free)} free`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(sys.ram.total)}`} />
+              {sys.disks.map((d, i) => (
+                <ResourceRow key={i} label={`Disk ${d.mountpoint}`} value={d.used} max={d.total} sub={`${fmt.bytes(d.free)} free · ${d.device}`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(d.total)}`} />
+              ))}
+            </div>
+          </div>
+
+          <div style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: "0.75rem" }}>Active containers</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              {containers.filter(c => c.state === "running").map(c => (
+                <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-text-success)", flexShrink: 0 }} />
+                    <span style={{ fontWeight: 500 }}>{c.name}</span>
+                    <span style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>{c.image.split(":")[0].split("/").pop()}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 12, color: "var(--color-text-secondary)", fontSize: 12 }}>
+                    <span>CPU {c.cpu_percent.toFixed(1)}%</span>
+                    <span>RAM {fmt.bytes(c.mem_usage)}</span>
+                    <span style={{ color: "var(--color-text-tertiary)" }}>↑ {c.uptime}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Containers tab */}
+      {tab === "containers" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ position: "relative", flex: 1 }}>
+              <i className="ti ti-search" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 14, color: "var(--color-text-secondary)" }} aria-hidden="true" />
+              <input
+                placeholder="Search containers…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{ width: "100%", paddingLeft: 32, boxSizing: "border-box" }}
+              />
+            </div>
+            {["all", "running", "stopped"].map(f => (
+              <button key={f} onClick={() => setFilter(f)} style={{
+                border: `0.5px solid ${filter === f ? "var(--color-border-primary)" : "var(--color-border-tertiary)"}`,
+                background: filter === f ? "var(--color-background-secondary)" : "transparent",
+                borderRadius: "var(--border-radius-md)", padding: "6px 12px", cursor: "pointer", fontSize: 12,
+                color: filter === f ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+              }}>
+                {f.charAt(0).toUpperCase() + f.slice(1)} {f === "all" ? `(${containers.length})` : f === "running" ? `(${running})` : `(${containers.length - running})`}
+              </button>
+            ))}
+          </div>
+          {filtered.length === 0 ? (
+            <div style={{ textAlign: "center", color: "var(--color-text-secondary)", padding: "2rem", fontSize: 14 }}>
+              No containers found
+            </div>
+          ) : (
+            filtered.map(c => <ContainerCard key={c.id} c={c} onAction={handleAction} />)
+          )}
+        </div>
+      )}
+
+      {/* Storage tab */}
+      {tab === "storage" && sys && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          {sys.disks.map((d, i) => (
+            <div key={i} style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.75rem" }}>
+                <div>
+                  <div style={{ fontWeight: 500, fontSize: 14 }}>{d.mountpoint}</div>
+                  <div style={{ fontSize: 12, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{d.device}</div>
+                </div>
+                <span style={{ fontSize: 22, fontWeight: 500 }}>{fmt.pct(d.percent)}</span>
+              </div>
+              <GaugeBar value={d.used} max={d.total} />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 12, color: "var(--color-text-secondary)" }}>
+                <span>Used: {fmt.bytes(d.used)}</span>
+                <span>Free: {fmt.bytes(d.free)}</span>
+                <span>Total: {fmt.bytes(d.total)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Network tab */}
+      {tab === "network" && sys && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <StatCard label="Total received" value={fmt.bytes(sys.network.rx_bytes)} icon="ti-arrow-down" color="var(--color-text-success)" />
+          <StatCard label="Total sent" value={fmt.bytes(sys.network.tx_bytes)} icon="ti-arrow-up" color="var(--color-text-info)" />
+          <div style={{ gridColumn: "span 2", background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: "0.75rem" }}>Container port bindings</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              {containers.filter(c => c.ports.length > 0).map(c => (
+                <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Badge state={c.state} />
+                    <span style={{ fontWeight: 500 }}>{c.name}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    {c.ports.map((p, i) => (
+                      <span key={i} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: "var(--color-background-info)", color: "var(--color-text-info)", fontFamily: "var(--font-mono)" }}>
+                        :{p.host}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ResourceRow = ({ label, value, max, sub, fmt: fmtFn }) => (
+  <div>
+    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+      <div>
+        <span style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
+        {sub && <span style={{ fontSize: 12, color: "var(--color-text-secondary)", marginLeft: 8 }}>{sub}</span>}
+      </div>
+      <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{fmtFn(value)}</span>
+    </div>
+    <GaugeBar value={value} max={max} />
+  </div>
+);

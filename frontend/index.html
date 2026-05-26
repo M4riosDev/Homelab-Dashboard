@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Server Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.0.0/tabler-icons.min.css" />
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #0f1117;
+        color: #e2e8f0;
+        min-height: 100vh;
+      }
+      #root { max-width: 960px; margin: 0 auto; padding: 2rem 1rem; }
+
+      :root {
+        --color-background-primary: #1a1d27;
+        --color-background-secondary: #13151f;
+        --color-background-tertiary: #0f1117;
+        --color-background-success: #0d2e1a;
+        --color-background-danger: #2e0d0d;
+        --color-background-warning: #2e230d;
+        --color-background-info: #0d1e2e;
+        --color-text-primary: #e2e8f0;
+        --color-text-secondary: #8892a4;
+        --color-text-tertiary: #4a5568;
+        --color-text-success: #48bb78;
+        --color-text-danger: #fc8181;
+        --color-text-warning: #f6ad55;
+        --color-text-info: #63b3ed;
+        --color-border-tertiary: rgba(255,255,255,0.08);
+        --color-border-secondary: rgba(255,255,255,0.15);
+        --color-border-primary: rgba(255,255,255,0.25);
+        --color-border-success: #48bb78;
+        --color-border-danger: #fc8181;
+        --color-border-warning: #f6ad55;
+        --color-border-info: #63b3ed;
+        --border-radius-md: 8px;
+        --border-radius-lg: 12px;
+        --font-sans: system-ui, -apple-system, sans-serif;
+        --font-mono: 'Courier New', monospace;
+        --accent: #63b3ed;
+      }
+
+      /* Form elements */
+      input[type="text"], input:not([type]) {
+        background: var(--color-background-secondary);
+        border: 0.5px solid var(--color-border-secondary);
+        border-radius: var(--border-radius-md);
+        color: var(--color-text-primary);
+        padding: 8px 12px;
+        font-size: 14px;
+        width: 100%;
+        outline: none;
+      }
+      input:focus {
+        border-color: var(--color-border-primary);
+        box-shadow: 0 0 0 2px rgba(99,179,237,0.15);
+      }
+      button { font-family: inherit; }
+      button:active { transform: scale(0.98); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

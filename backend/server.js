@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const Docker = require("dockerode");
 const si = require("systeminformation");
+const os = require("os");
 
 const app = express();
 const docker = new Docker({ socketPath: "/var/run/docker.sock" });
@@ -9,24 +10,57 @@ const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 app.use(cors());
 app.use(express.json());
 
+const SKIP_MOUNTS = [
+  "/etc/resolv.conf", "/etc/hostname", "/etc/hosts",
+  "/proc", "/sys", "/dev", "/run", "/snap",
+];
+const isRealDisk = (d) =>
+  !SKIP_MOUNTS.some((m) => d.mount.startsWith(m)) &&
+  !d.fs.startsWith("tmpfs") &&
+  !d.fs.startsWith("udev") &&
+  !d.fs.startsWith("overlay") &&
+  d.size > 0;
+
 app.get("/api/system", async (req, res) => {
   try {
-    const [cpu, mem, disks, net, osInfo, time] = await Promise.all([
+    const [cpu, mem, disks, net, osInfo, time, cpuInfo] = await Promise.all([
       si.currentLoad(),
       si.mem(),
       si.fsSize(),
       si.networkStats(),
       si.osInfo(),
       si.time(),
+      si.cpu(),
     ]);
 
+    let hostname = os.hostname();
+    try {
+      const fs = require("fs");
+      const h = fs.readFileSync("/proc/sys/kernel/hostname", "utf8").trim();
+      if (h) hostname = h;
+    } catch (_) {}
+
+    const realDisks = disks.filter(isRealDisk).reduce((acc, d) => {
+      if (!acc.find((x) => x.device === d.fs)) {
+        acc.push({
+          device: d.fs,
+          mountpoint: d.mount,
+          total: d.size,
+          used: d.used,
+          free: d.size - d.used,
+          percent: d.use,
+        });
+      }
+      return acc;
+    }, []);
+
     res.json({
-      hostname: osInfo.hostname,
+      hostname,
       uptime: time.uptime,
       cpu: {
         percent: cpu.currentLoad,
-        cores: cpu.cpus.length,
-        model: (await si.cpu()).brand,
+        cores: cpuInfo.physicalCores || cpu.cpus.length,
+        model: cpuInfo.brand,
       },
       ram: {
         total: mem.total,
@@ -34,14 +68,7 @@ app.get("/api/system", async (req, res) => {
         free: mem.free,
         available: mem.available,
       },
-      disks: disks.map((d) => ({
-        device: d.fs,
-        mountpoint: d.mount,
-        total: d.size,
-        used: d.used,
-        free: d.size - d.used,
-        percent: d.use,
-      })),
+      disks: realDisks,
       network: net.reduce(
         (acc, n) => ({
           rx_bytes: acc.rx_bytes + n.rx_bytes,
@@ -64,9 +91,7 @@ app.get("/api/docker", async (req, res) => {
     const withStats = await Promise.all(
       containers.map(async (c) => {
         const container = docker.getContainer(c.Id);
-        let cpu_percent = 0,
-          mem_usage = 0,
-          mem_limit = 0;
+        let cpu_percent = 0, mem_usage = 0, mem_limit = 0;
 
         if (c.State === "running") {
           try {
@@ -78,21 +103,24 @@ app.get("/api/docker", async (req, res) => {
               stats.cpu_stats.system_cpu_usage -
               stats.precpu_stats.system_cpu_usage;
             const numCpus = stats.cpu_stats.online_cpus || 1;
-            cpu_percent = (cpuDelta / systemDelta) * numCpus * 100;
-            mem_usage = stats.memory_stats.usage || 0;
+            if (systemDelta > 0) {
+              cpu_percent = (cpuDelta / systemDelta) * numCpus * 100;
+            }
+            mem_usage = stats.memory_stats.usage - (stats.memory_stats.stats?.cache || 0);
             mem_limit = stats.memory_stats.limit || 0;
           } catch (_) {}
         }
 
         const ports = (c.Ports || [])
           .filter((p) => p.PublicPort)
-          .map((p) => ({ host: p.PublicPort, container: p.PrivatePort }));
+          .map((p) => ({ host: p.PublicPort, container: p.PrivatePort, type: p.Type }));
 
         const createdDate = new Date(c.Created * 1000);
         const uptimeSec = c.State === "running"
           ? Math.floor((Date.now() - createdDate) / 1000) : 0;
         const d = Math.floor(uptimeSec / 86400);
         const h = Math.floor((uptimeSec % 86400) / 3600);
+        const m = Math.floor((uptimeSec % 3600) / 60);
 
         return {
           id: c.Id,
@@ -101,12 +129,12 @@ app.get("/api/docker", async (req, res) => {
           status: c.Status,
           state: c.State,
           cpu_percent: Math.max(0, cpu_percent),
-          mem_usage,
+          mem_usage: Math.max(0, mem_usage),
           mem_limit,
           ports,
           created: createdDate.toISOString().split("T")[0],
           uptime: c.State === "running"
-            ? d > 0 ? `${d}d ${h}h` : `${h}h`
+            ? d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`
             : "—",
         };
       })
@@ -126,14 +154,17 @@ app.post("/api/docker/:id/:action", async (req, res) => {
     switch (action) {
       case "start":
         await container.start();
+        await new Promise(r => setTimeout(r, 1500));
         res.json({ ok: true });
         break;
       case "stop":
-        await container.stop();
+        await container.stop({ t: 10 });
+        await new Promise(r => setTimeout(r, 1500));
         res.json({ ok: true });
         break;
       case "restart":
-        await container.restart();
+        await container.restart({ t: 10 });
+        await new Promise(r => setTimeout(r, 2000));
         res.json({ ok: true });
         break;
       case "pause":
@@ -152,13 +183,15 @@ app.post("/api/docker/:id/:action", async (req, res) => {
         const logs = await container.logs({
           stdout: true,
           stderr: true,
-          tail: 200,
+          tail: 300,
           timestamps: true,
         });
         const clean = logs
           .toString("utf8")
-          .replace(/[\x00-\x08\x0e-\x1f]/g, "")
-          .trim();
+          .split("\n")
+          .map(line => line.replace(/^[\x00-\x08\x0e-\x1f]{1,8}/, "").trimEnd())
+          .filter(Boolean)
+          .join("\n");
         res.json({ logs: clean });
         break;
       }
@@ -175,8 +208,41 @@ app.post("/api/docker/:id/:action", async (req, res) => {
   }
 });
 
+app.get("/api/logs/system", async (req, res) => {
+  try {
+    const { execSync } = require("child_process");
+    let logs = "";
+    try {
+      logs = execSync("journalctl -n 200 --no-pager -o short-iso 2>/dev/null || tail -200 /var/log/syslog 2>/dev/null || echo 'No system logs available'", {
+        timeout: 5000,
+      }).toString();
+    } catch (_) {
+      logs = "Cannot read system logs — permission denied.";
+    }
+    res.json({ logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.get("/api/logs/docker", async (req, res) => {
+  try {
+    const { execSync } = require("child_process");
+    const out = execSync(
+      "docker events --since 24h --until $(date +%s) --format '{{.Time}} {{.Type}} {{.Action}} {{.Actor.Attributes.name}}' 2>/dev/null | tail -100",
+      { timeout: 5000 }
+    ).toString();
+    res.json({ logs: out || "No Docker events in the last 24h" });
+  } catch (err) {
+    res.json({ logs: "No Docker events available" });
+  }
+});
+
+
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server dashboard backend running on :${PORT}`);
-  console.log(`Docker socket: /var/run/docker.sock`);
+  console.log(`Dashboard backend running on :${PORT}`);
 });

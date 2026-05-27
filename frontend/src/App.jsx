@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const API_BASE = "";
+const CPU_HISTORY_MAX = 12;
 
 const useServerData = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [cpuHistory, setCpuHistory] = useState([]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -19,6 +21,10 @@ const useServerData = () => {
       setData({ system: sys, containers: docker });
       setLastUpdated(new Date());
       setError(null);
+      setCpuHistory(prev => {
+        const next = [...prev, Math.round(sys.cpu?.percent ?? 0)];
+        return next.length > CPU_HISTORY_MAX ? next.slice(-CPU_HISTORY_MAX) : next;
+      });
     } catch (e) {
       setError("Cannot connect to backend — showing demo data");
       if (!data) {
@@ -36,7 +42,7 @@ const useServerData = () => {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  return { data, loading, error, refetch: fetchData, lastUpdated };
+  return { data, loading, error, refetch: fetchData, lastUpdated, cpuHistory };
 };
 
 const getMockData = () => ({
@@ -86,6 +92,38 @@ const GaugeBar = ({ value, max, color = "var(--accent)" }) => {
   );
 };
 
+const CpuSparkline = ({ history }) => {
+  if (!history || history.length < 2) return null;
+  const W = 120, H = 32, PAD = 2;
+  const max = Math.max(10, ...history);
+  const pts = history.map((v, i) => {
+    const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
+    const y = H - PAD - (v / max) * (H - PAD * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const last = history[history.length - 1];
+  const color = last > 80 ? "#E24B4A" : last > 60 ? "#EF9F27" : "var(--accent)";
+  // closed fill path
+  const fillPts = [
+    `${PAD},${H - PAD}`,
+    ...history.map((v, i) => {
+      const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
+      const y = H - PAD - (v / max) * (H - PAD * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }),
+    `${W - PAD},${H - PAD}`,
+  ].join(" ");
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <svg width={W} height={H} style={{ flexShrink: 0 }}>
+        <polygon points={fillPts} fill={color} fillOpacity={0.12} />
+        <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+      <span style={{ fontSize: 11, color: "var(--color-text-secondary)", whiteSpace: "nowrap" }}>60s</span>
+    </div>
+  );
+};
+
 const Badge = ({ state }) => {
   const cfg = {
     running: { bg: "var(--color-background-success)", color: "var(--color-text-success)", label: "running" },
@@ -108,7 +146,7 @@ const ContainerCard = ({ c, onAction }) => {
 
   const handleAction = async (action) => {
     setActionLoading(action);
-    await onAction(c.id, action, c.name); // BUG FIX #4: passiamo il name al handler
+    await onAction(c.id, action, c.name);
     setActionLoading(null);
   };
 
@@ -137,6 +175,8 @@ const ContainerCard = ({ c, onAction }) => {
               <ActionBtn icon="ti-square" label="Stop" onClick={() => handleAction("stop")} loading={actionLoading === "stop"} danger />
               <ActionBtn icon="ti-refresh" label="Restart" onClick={() => handleAction("restart")} loading={actionLoading === "restart"} />
             </>
+          ) : c.state === "paused" ? (
+            <ActionBtn icon="ti-player-play" label="Unpause" onClick={() => handleAction("unpause")} loading={actionLoading === "unpause"} success />
           ) : (
             <ActionBtn icon="ti-player-play" label="Start" onClick={() => handleAction("start")} loading={actionLoading === "start"} success />
           )}
@@ -412,7 +452,7 @@ const LogsTab = () => {
 };
 
 export default function App() {
-  const { data, loading, error, refetch, lastUpdated } = useServerData();
+  const { data, loading, error, refetch, lastUpdated, cpuHistory } = useServerData();
   const [tab, setTab] = useState("overview");
   const [filter, setFilter] = useState("all");
   const [modal, setModal] = useState(null);
@@ -501,6 +541,12 @@ export default function App() {
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: "0.75rem" }}>System resources</div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
               <ResourceRow label="CPU" value={sys.cpu.percent} max={100} sub={`${sys.cpu.cores} cores · ${sys.cpu.model}`} fmt={v => `${v.toFixed(1)}%`} />
+              {cpuHistory.length >= 2 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: -4, marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: "var(--color-text-secondary)", width: 32 }}>hist</span>
+                  <CpuSparkline history={cpuHistory} />
+                </div>
+              )}
               <ResourceRow label="RAM" value={sys.ram.used} max={sys.ram.total} sub={`${fmt.bytes(sys.ram.free)} free`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(sys.ram.total)}`} />
               {sys.disks.map((d, i) => (
                 <ResourceRow key={i} label={`Disk ${d.mountpoint}`} value={d.used} max={d.total} sub={`${fmt.bytes(d.free)} free · ${d.device}`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(d.total)}`} />

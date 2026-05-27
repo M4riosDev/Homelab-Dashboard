@@ -10,6 +10,29 @@ const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 app.use(cors());
 app.use(express.json());
 
+const actionRateMap = new Map();
+const RATE_LIMIT = 10;
+const RATE_WINDOW = 60_000;
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const entry = actionRateMap.get(ip) || { count: 0, resetAt: now + RATE_WINDOW };
+  if (now > entry.resetAt) {
+    entry.count = 0;
+    entry.resetAt = now + RATE_WINDOW;
+  }
+  entry.count++;
+  actionRateMap.set(ip, entry);
+  return entry.count <= RATE_LIMIT;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of actionRateMap) {
+    if (now > entry.resetAt) actionRateMap.delete(ip);
+  }
+}, 5 * 60_000);
+
 const SKIP_MOUNTS = [
   "/etc/resolv.conf", "/etc/hostname", "/etc/hosts",
   "/proc", "/sys", "/dev", "/run", "/snap",
@@ -20,6 +43,17 @@ const isRealDisk = (d) =>
   !d.fs.startsWith("udev") &&
   !d.fs.startsWith("overlay") &&
   d.size > 0;
+
+
+async function getContainerStats(container, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    container.stats({ stream: false })
+      .then((s) => { clearTimeout(timer); resolve(s); })
+      .catch(() => { clearTimeout(timer); resolve(null); });
+  });
+}
+
 
 app.get("/api/system", async (req, res) => {
   try {
@@ -97,34 +131,45 @@ app.get("/api/docker", async (req, res) => {
         let cpu_percent = 0, mem_usage = 0, mem_limit = 0;
 
         if (c.State === "running") {
-          try {
-            const stats = await container.stats({ stream: false });
-            const cpuDelta =
-              stats.cpu_stats.cpu_usage.total_usage -
-              stats.precpu_stats.cpu_usage.total_usage;
-            const systemDelta =
-              stats.cpu_stats.system_cpu_usage -
-              stats.precpu_stats.system_cpu_usage;
-            const numCpus = stats.cpu_stats.online_cpus || 1;
-            if (systemDelta > 0) {
-              cpu_percent = (cpuDelta / systemDelta) * numCpus * 100;
-            }
-            mem_usage = stats.memory_stats.usage - (stats.memory_stats.stats?.cache || 0);
-            mem_limit = stats.memory_stats.limit || 0;
-          } catch (_) {}
+          const stats = await getContainerStats(container, 8000);
+          if (stats) {
+            try {
+              const cpuDelta =
+                stats.cpu_stats.cpu_usage.total_usage -
+                stats.precpu_stats.cpu_usage.total_usage;
+              const systemDelta =
+                stats.cpu_stats.system_cpu_usage -
+                stats.precpu_stats.system_cpu_usage;
+              const numCpus = stats.cpu_stats.online_cpus || 1;
+              if (systemDelta > 0) {
+                cpu_percent = (cpuDelta / systemDelta) * numCpus * 100;
+              }
+              mem_usage = stats.memory_stats.usage - (stats.memory_stats.stats?.cache || 0);
+              mem_limit = stats.memory_stats.limit || 0;
+            } catch (_) {}
+          }
         }
+
+        let uptimeSec = 0;
+        if (c.State === "running") {
+          try {
+            const info = await container.inspect();
+            const startedAt = new Date(info.State.StartedAt);
+            uptimeSec = Math.floor((Date.now() - startedAt) / 1000);
+          } catch (_) {
+            uptimeSec = Math.floor((Date.now() - c.Created * 1000) / 1000);
+          }
+        }
+
+        const d = Math.floor(uptimeSec / 86400);
+        const h = Math.floor((uptimeSec % 86400) / 3600);
+        const m = Math.floor((uptimeSec % 3600) / 60);
 
         const ports = (c.Ports || [])
           .filter((p) => p.PublicPort)
           .map((p) => ({ host: p.PublicPort, container: p.PrivatePort, type: p.Type }));
 
         const createdDate = new Date(c.Created * 1000);
-        const uptimeSec = c.State === "running"
-          ? Math.floor((Date.now() - createdDate) / 1000) : 0;
-        const d = Math.floor(uptimeSec / 86400);
-        const h = Math.floor((uptimeSec % 86400) / 3600);
-        const m = Math.floor((uptimeSec % 3600) / 60);
-
         const rawName = c.Names[0]?.replace(/^\//, "") || c.Id.slice(0, 12);
 
         return {
@@ -152,6 +197,11 @@ app.get("/api/docker", async (req, res) => {
 });
 
 app.post("/api/docker/:id/:action", async (req, res) => {
+  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
+  if (!checkRateLimit(clientIp)) {
+    return res.status(429).json({ error: "Too many requests — slow down." });
+  }
+
   const { id, action } = req.params;
   const container = docker.getContainer(id);
 

@@ -11,6 +11,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PORT=3001
+      - NODE_NAME=${HOSTNAME}
     networks:
       - dashboard-net
 

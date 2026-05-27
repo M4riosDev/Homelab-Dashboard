@@ -33,12 +33,15 @@ app.get("/api/system", async (req, res) => {
       si.cpu(),
     ]);
 
-    let hostname = os.hostname();
-    try {
-      const fs = require("fs");
-      const h = fs.readFileSync("/proc/sys/kernel/hostname", "utf8").trim();
-      if (h) hostname = h;
-    } catch (_) {}
+    let hostname = process.env.NODE_NAME || process.env.HOST_HOSTNAME || "";
+    if (!hostname) {
+      try {
+        const fs = require("fs");
+        const h = fs.readFileSync("/proc/sys/kernel/hostname", "utf8").trim();
+        if (h) hostname = h;
+      } catch (_) {}
+    }
+    if (!hostname) hostname = os.hostname();
 
     const realDisks = disks.filter(isRealDisk).reduce((acc, d) => {
       if (!acc.find((x) => x.device === d.fs)) {
@@ -122,9 +125,11 @@ app.get("/api/docker", async (req, res) => {
         const h = Math.floor((uptimeSec % 86400) / 3600);
         const m = Math.floor((uptimeSec % 3600) / 60);
 
+        const rawName = c.Names[0]?.replace(/^\//, "") || c.Id.slice(0, 12);
+
         return {
           id: c.Id,
-          name: c.Names[0]?.replace("/", "") || c.Id.slice(0, 12),
+          name: rawName,
           image: c.Image,
           status: c.Status,
           state: c.State,
@@ -213,9 +218,10 @@ app.get("/api/logs/system", async (req, res) => {
     const { execSync } = require("child_process");
     let logs = "";
     try {
-      logs = execSync("journalctl -n 200 --no-pager -o short-iso 2>/dev/null || tail -200 /var/log/syslog 2>/dev/null || echo 'No system logs available'", {
-        timeout: 5000,
-      }).toString();
+      logs = execSync(
+        "journalctl -n 200 --no-pager -o short-iso 2>/dev/null || tail -200 /var/log/syslog 2>/dev/null || echo 'No system logs available'",
+        { timeout: 5000 }
+      ).toString();
     } catch (_) {
       logs = "Cannot read system logs — permission denied.";
     }
@@ -225,20 +231,24 @@ app.get("/api/logs/system", async (req, res) => {
   }
 });
 
-
 app.get("/api/logs/docker", async (req, res) => {
   try {
     const { execSync } = require("child_process");
-    const out = execSync(
-      "docker events --since 24h --until $(date +%s) --format '{{.Time}} {{.Type}} {{.Action}} {{.Actor.Attributes.name}}' 2>/dev/null | tail -100",
-      { timeout: 5000 }
-    ).toString();
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    let out = "";
+    try {
+      out = execSync(
+        `docker events --since "${since}" --format '{{.Time}} [{{.Type}}] {{.Action}} → {{.Actor.Attributes.name}}' 2>/dev/null | tail -150`,
+        { timeout: 8000, shell: true }
+      ).toString().trim();
+    } catch (_) {
+      out = "";
+    }
     res.json({ logs: out || "No Docker events in the last 24h" });
   } catch (err) {
     res.json({ logs: "No Docker events available" });
   }
 });
-
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 

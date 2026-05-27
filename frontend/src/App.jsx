@@ -108,7 +108,7 @@ const ContainerCard = ({ c, onAction }) => {
 
   const handleAction = async (action) => {
     setActionLoading(action);
-    await onAction(c.id, action);
+    await onAction(c.id, action, c.name); // BUG FIX #4: passiamo il name al handler
     setActionLoading(null);
   };
 
@@ -264,7 +264,7 @@ const StatCard = ({ label, value, sub, icon, color }) => (
 
 const Modal = ({ title, content, onClose }) => (
   <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={onClose}>
-    <div onClick={e => e.stopPropagation()} style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-lg)", padding: "1.5rem", maxWidth: 540, width: "90%", maxHeight: "70vh", overflow: "auto" }}>
+    <div onClick={e => e.stopPropagation()} style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-lg)", padding: "1.5rem", maxWidth: 680, width: "90%", maxHeight: "75vh", overflow: "auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
         <span style={{ fontSize: 15, fontWeight: 500 }}>{title}</span>
         <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--color-text-secondary)", padding: 4 }}><i className="ti ti-x" /></button>
@@ -274,6 +274,143 @@ const Modal = ({ title, content, onClose }) => (
   </div>
 );
 
+const LogsTab = () => {
+  const [logType, setLogType] = useState("system");
+  const [logs, setLogs] = useState("");
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [containers, setContainers] = useState([]);
+  const [selectedContainer, setSelectedContainer] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/docker`)
+      .then(r => r.json())
+      .then(setContainers)
+      .catch(() => {});
+  }, []);
+
+  const fetchLogs = useCallback(async () => {
+    setLoadingLogs(true);
+    setLogs("");
+    try {
+      if (logType === "system") {
+        const r = await fetch(`${API_BASE}/api/logs/system`);
+        const j = await r.json();
+        setLogs(j.logs || "No logs available");
+      } else if (logType === "docker-events") {
+        const r = await fetch(`${API_BASE}/api/logs/docker`);
+        const j = await r.json();
+        setLogs(j.logs || "No Docker events available");
+      } else if (logType === "container" && selectedContainer) {
+        const r = await fetch(`${API_BASE}/api/docker/${selectedContainer}/logs`, { method: "POST" });
+        const j = await r.json();
+        setLogs(j.logs || "No logs available");
+      }
+    } catch {
+      setLogs("Error fetching logs — backend not reachable.");
+    } finally {
+      setLoadingLogs(false);
+    }
+  }, [logType, selectedContainer]);
+
+  useEffect(() => {
+    if (logType !== "container" || selectedContainer) {
+      fetchLogs();
+    }
+  }, [logType, selectedContainer]);
+
+  const btnStyle = (active) => ({
+    border: `0.5px solid ${active ? "var(--color-border-primary)" : "var(--color-border-tertiary)"}`,
+    background: active ? "var(--color-background-secondary)" : "transparent",
+    borderRadius: "var(--border-radius-md)",
+    padding: "6px 14px",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: active ? 500 : 400,
+    color: active ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      {/* Log type selector */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button style={btnStyle(logType === "system")} onClick={() => setLogType("system")}>
+          <i className="ti ti-device-desktop" style={{ fontSize: 13, marginRight: 6 }} />System logs
+        </button>
+        <button style={btnStyle(logType === "docker-events")} onClick={() => setLogType("docker-events")}>
+          <i className="ti ti-brand-docker" style={{ fontSize: 13, marginRight: 6 }} />Docker events
+        </button>
+        <button style={btnStyle(logType === "container")} onClick={() => setLogType("container")}>
+          <i className="ti ti-file-description" style={{ fontSize: 13, marginRight: 6 }} />Container logs
+        </button>
+        <button
+          onClick={fetchLogs}
+          disabled={loadingLogs}
+          style={{ ...btnStyle(false), marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}
+        >
+          <i className={`ti ${loadingLogs ? "ti-loader" : "ti-refresh"}`} style={{ fontSize: 13 }} />
+          {loadingLogs ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+
+      {/* Container picker */}
+      {logType === "container" && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {containers.map(c => (
+            <button
+              key={c.id}
+              onClick={() => setSelectedContainer(c.id)}
+              style={{
+                ...btnStyle(selectedContainer === c.id),
+                display: "flex", alignItems: "center", gap: 6,
+              }}
+            >
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                background: c.state === "running" ? "var(--color-text-success)" : "var(--color-text-danger)",
+              }} />
+              {c.name}
+            </button>
+          ))}
+          {containers.length === 0 && (
+            <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>No containers found</span>
+          )}
+        </div>
+      )}
+
+      {/* Log output */}
+      <div style={{
+        background: "var(--color-background-primary)",
+        border: "0.5px solid var(--color-border-tertiary)",
+        borderRadius: "var(--border-radius-lg)",
+        padding: "1rem",
+        minHeight: 300,
+      }}>
+        {loadingLogs ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--color-text-secondary)", fontSize: 13 }}>
+            <i className="ti ti-loader" style={{ fontSize: 15 }} /> Loading logs…
+          </div>
+        ) : logType === "container" && !selectedContainer ? (
+          <div style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>
+            ← Select a container to view its logs
+          </div>
+        ) : (
+          <pre style={{
+            fontSize: 12,
+            fontFamily: "var(--font-mono)",
+            color: "var(--color-text-secondary)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+            margin: 0,
+            lineHeight: 1.6,
+          }}>
+            {logs || "No output"}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const { data, loading, error, refetch, lastUpdated } = useServerData();
   const [tab, setTab] = useState("overview");
@@ -281,16 +418,21 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
 
-  const handleAction = async (id, action) => {
+  const handleAction = async (id, action, name) => {
     try {
       const res = await fetch(`${API_BASE}/api/docker/${id}/${action}`, { method: "POST" });
       const json = await res.json();
-      if (action === "logs") setModal({ title: `Logs — ${id.slice(0, 12)}`, content: json.logs });
-      else if (action === "inspect") setModal({ title: `Inspect — ${id.slice(0, 12)}`, content: JSON.stringify(json, null, 2) });
-      else if (action === "shell") setModal({ title: "Shell", content: `To open a shell, run:\n\ndocker exec -it ${id.slice(0, 12)} /bin/sh\n\n(or /bin/bash depending on the image)` });
-      else setTimeout(refetch, 1200);
+      if (action === "logs") {
+        setModal({ title: `Logs — ${name || id.slice(0, 12)}`, content: json.logs });
+      } else if (action === "inspect") {
+        setModal({ title: `Inspect — ${name || id.slice(0, 12)}`, content: JSON.stringify(json, null, 2) });
+      } else if (action === "shell") {
+        setModal({ title: "Shell", content: `To open a shell, run:\n\ndocker exec -it ${name || id.slice(0, 12)} /bin/sh\n\n(or /bin/bash depending on the image)` });
+      } else {
+        setTimeout(refetch, 1200);
+      }
     } catch {
-      setModal({ title: "Demo mode", content: `Action "${action}" on container ${id.slice(0, 12)} — backend not connected.\n\nDeploy the backend to enable container control.` });
+      setModal({ title: "Demo mode", content: `Action "${action}" on container ${name || id.slice(0, 12)} — backend not connected.\n\nDeploy the backend to enable container control.` });
     }
   };
 
@@ -332,9 +474,8 @@ export default function App() {
         </button>
       </div>
 
-      {/* Tabs */}
       <div style={{ display: "flex", gap: 4, marginBottom: "1.5rem", borderBottom: "0.5px solid var(--color-border-tertiary)", paddingBottom: "0.5rem" }}>
-        {["overview", "containers", "storage", "network"].map(t => (
+        {["overview", "containers", "storage", "network", "logs"].map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
             border: "none", background: tab === t ? "var(--color-background-secondary)" : "transparent",
             borderRadius: "var(--border-radius-md)", padding: "6px 14px", cursor: "pointer",
@@ -423,26 +564,35 @@ export default function App() {
         </div>
       )}
 
-      {/* Storage tab */}
-      {tab === "storage" && sys && (
+      {tab === "storage" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-          {sys.disks.map((d, i) => (
-            <div key={i} style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.75rem" }}>
-                <div>
-                  <div style={{ fontWeight: 500, fontSize: 14 }}>{d.mountpoint}</div>
-                  <div style={{ fontSize: 12, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{d.device}</div>
-                </div>
-                <span style={{ fontSize: 22, fontWeight: 500 }}>{fmt.pct(d.percent)}</span>
-              </div>
-              <GaugeBar value={d.used} max={d.total} />
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 12, color: "var(--color-text-secondary)" }}>
-                <span>Used: {fmt.bytes(d.used)}</span>
-                <span>Free: {fmt.bytes(d.free)}</span>
-                <span>Total: {fmt.bytes(d.total)}</span>
-              </div>
+          {!sys ? (
+            <div style={{ textAlign: "center", color: "var(--color-text-secondary)", padding: "2rem", fontSize: 14 }}>
+              Loading storage info…
             </div>
-          ))}
+          ) : sys.disks.length === 0 ? (
+            <div style={{ textAlign: "center", color: "var(--color-text-secondary)", padding: "2rem", fontSize: 14 }}>
+              No disks detected
+            </div>
+          ) : (
+            sys.disks.map((d, i) => (
+              <div key={i} style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.75rem" }}>
+                  <div>
+                    <div style={{ fontWeight: 500, fontSize: 14 }}>{d.mountpoint}</div>
+                    <div style={{ fontSize: 12, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{d.device}</div>
+                  </div>
+                  <span style={{ fontSize: 22, fontWeight: 500 }}>{fmt.pct(d.percent)}</span>
+                </div>
+                <GaugeBar value={d.used} max={d.total} />
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 12, color: "var(--color-text-secondary)" }}>
+                  <span>Used: {fmt.bytes(d.used)}</span>
+                  <span>Free: {fmt.bytes(d.free)}</span>
+                  <span>Total: {fmt.bytes(d.total)}</span>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       )}
 
@@ -473,6 +623,8 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {tab === "logs" && <LogsTab />}
     </div>
   );
 }

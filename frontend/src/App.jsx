@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 const API_BASE = "";
-const CPU_HISTORY_MAX = 12;
+const CPU_HISTORY_MAX = 180;
 
 const useServerData = () => {
   const [data, setData] = useState(null);
@@ -95,114 +95,72 @@ const GaugeBar = ({ value, max, color = "var(--accent)" }) => {
 const CpuSparkline = ({ history }) => {
   if (!history || history.length < 2) return null;
 
-  const W = 170;
-  const H = 52;
-  const PAD = 4;
+  const W = 200;
+  const H = 40;
+  const PAD = 2;
   const max = 100;
 
-  const points = history
-    .map((v, i) => {
-      const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
-      const y = H - PAD - (v / max) * (H - PAD * 2);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+  const pts = history.map((v, i) => {
+    const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
+    const y = H - PAD - (v / max) * (H - PAD * 2);
+    return [x, y];
+  });
+
+  const points = pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
 
   const area = [
-    `${PAD},${H - PAD}`,
-    ...history.map((v, i) => {
-      const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
-      const y = H - PAD - (v / max) * (H - PAD * 2);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }),
-    `${W - PAD},${H - PAD}`,
+    `${PAD},${H}`,
+    ...pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`),
+    `${W - PAD},${H}`,
   ].join(" ");
 
   const last = history[history.length - 1];
-
-  const color =
-    last > 80
-      ? "#ff5f56"
-      : last > 60
-      ? "#ffbd2e"
-      : "#4da3ff";
-
-  const lastX = W - PAD;
-  const lastY = H - PAD - (last / max) * (H - PAD * 2);
+  const color = last > 80 ? "#E24B4A" : last > 60 ? "#EF9F27" : "#4da3ff";
+  const [lastX, lastY] = pts[pts.length - 1];
 
   return (
-    <div style={{ marginTop: 16 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 8,
-          fontSize: 12,
-          color: "var(--color-text-secondary)",
-        }}
-      >
-        <span>CPU activity</span>
-        <span>60s</span>
-      </div>
+    <svg
+      width={W}
+      height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ width: "100%", height: H, display: "block", overflow: "visible" }}
+    >
+      <defs>
+        <linearGradient id="cpuAreaFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.22" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+        </linearGradient>
+        <filter id="sparkGlow">
+          <feGaussianBlur stdDeviation="1.5" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
 
-      <svg width={W} height={H} style={{ width: "100%", overflow: "visible" }}>
-        <defs>
-          <linearGradient id="cpuFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.28" />
-            <stop offset="100%" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
+      {/* subtle grid lines */}
+      {[0.33, 0.66].map((f, i) => (
+        <line key={i} x1={PAD} y1={H * f} x2={W - PAD} y2={H * f}
+          stroke="rgba(255,255,255,0.05)" strokeWidth="1" strokeDasharray="3 4" />
+      ))}
 
-        <line x1="0" y1="25%" x2="100%" y2="25%" stroke="rgba(255,255,255,0.04)" />
-        <line x1="0" y1="50%" x2="100%" y2="50%" stroke="rgba(255,255,255,0.04)" />
-        <line x1="0" y1="75%" x2="100%" y2="75%" stroke="rgba(255,255,255,0.04)" />
+      {/* fill area */}
+      <polygon points={area} fill="url(#cpuAreaFill)" style={{ transition: "all 200ms ease-out" }} />
 
-        <polyline
-          points={points}
-          fill="none"
-          stroke={color}
-          strokeWidth="6"
-          opacity="0.12"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={{ transition: "all 180ms ease-out" }}
-        />
+      {/* glow line (thick, low opacity) */}
+      <polyline points={points} fill="none" stroke={color} strokeWidth="5"
+        opacity="0.15" strokeLinecap="round" strokeLinejoin="round"
+        style={{ transition: "all 200ms ease-out" }} />
 
-        <polygon
-          points={area}
-          fill="url(#cpuFill)"
-          style={{ transition: "all 180ms ease-out" }}
-        />
+      {/* main line */}
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1.75"
+        strokeLinecap="round" strokeLinejoin="round"
+        style={{ transition: "all 200ms ease-out" }} filter="url(#sparkGlow)" />
 
-        <polyline
-          points={points}
-          fill="none"
-          stroke={color}
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={{ transition: "all 180ms ease-out" }}
-        />
-
-        <circle
-          cx={lastX}
-          cy={lastY}
-          r="4"
-          fill={color}
-          style={{ transition: "all 180ms ease-out" }}
-        />
-
-        <circle
-          cx={lastX}
-          cy={lastY}
-          r="10"
-          fill={color}
-          opacity="0.15"
-          style={{ transition: "all 180ms ease-out" }}
-        />
-      </svg>
-    </div>
+      {/* dot + halo at latest value */}
+      <circle cx={lastX} cy={lastY} r="7" fill={color} opacity="0.18"
+        style={{ transition: "all 200ms ease-out" }} />
+      <circle cx={lastX} cy={lastY} r="3.5" fill={color}
+        style={{ transition: "all 200ms ease-out" }} />
+    </svg>
   );
 };
 
@@ -622,13 +580,21 @@ export default function App() {
           <div style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: "0.75rem" }}>System resources</div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-              <ResourceRow label="CPU" value={sys.cpu.percent} max={100} sub={`${sys.cpu.cores} cores · ${sys.cpu.model}`} fmt={v => `${v.toFixed(1)}%`} />
-              {cpuHistory.length >= 2 && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: -4, marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, color: "var(--color-text-secondary)", width: 32 }}>hist</span>
-                  <CpuSparkline history={cpuHistory} />
-                </div>
-              )}
+              <ResourceRow label="CPU" value={sys.cpu.percent} max={100} sub={`${sys.cpu.cores} cores · ${sys.cpu.model}`} fmt={v => `${v.toFixed(1)}%`}>
+                {cpuHistory.length >= 2 && (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, color: "var(--color-text-secondary)", letterSpacing: "0.04em", textTransform: "uppercase" }}>Activity · last 15 min</span>
+                      <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                        {Math.min(...cpuHistory)}% – {Math.max(...cpuHistory)}%
+                      </span>
+                    </div>
+                    <div style={{ background: "rgba(255,255,255,0.025)", borderRadius: 6, padding: "6px 8px" }}>
+                      <CpuSparkline history={cpuHistory} />
+                    </div>
+                  </div>
+                )}
+              </ResourceRow>
               <ResourceRow label="RAM" value={sys.ram.used} max={sys.ram.total} sub={`${fmt.bytes(sys.ram.free)} free`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(sys.ram.total)}`} />
               {sys.disks.map((d, i) => (
                 <ResourceRow key={i} label={`Disk ${d.mountpoint}`} value={d.used} max={d.total} sub={`${fmt.bytes(d.free)} free · ${d.device}`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(d.total)}`} />
@@ -757,7 +723,7 @@ export default function App() {
   );
 }
 
-const ResourceRow = ({ label, value, max, sub, fmt: fmtFn }) => (
+const ResourceRow = ({ label, value, max, sub, fmt: fmtFn, children }) => (
   <div>
     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
       <div>
@@ -767,5 +733,6 @@ const ResourceRow = ({ label, value, max, sub, fmt: fmtFn }) => (
       <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{fmtFn(value)}</span>
     </div>
     <GaugeBar value={value} max={max} />
+    {children && <div style={{ marginTop: 10 }}>{children}</div>}
   </div>
 );

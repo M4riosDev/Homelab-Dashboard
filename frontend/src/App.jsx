@@ -94,17 +94,21 @@ const GaugeBar = ({ value, max, color = "var(--accent)" }) => {
 
 const CpuSparkline = ({ history }) => {
   if (!history || history.length < 2) return null;
-  const W = 120, H = 32, PAD = 2;
-  const max = Math.max(10, ...history);
-  const pts = history.map((v, i) => {
-    const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
-    const y = H - PAD - (v / max) * (H - PAD * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-  const last = history[history.length - 1];
-  const color = last > 80 ? "#E24B4A" : last > 60 ? "#EF9F27" : "var(--accent)";
-  // closed fill path
-  const fillPts = [
+
+  const W = 170;
+  const H = 52;
+  const PAD = 4;
+  const max = 100;
+
+  const points = history
+    .map((v, i) => {
+      const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
+      const y = H - PAD - (v / max) * (H - PAD * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  const area = [
     `${PAD},${H - PAD}`,
     ...history.map((v, i) => {
       const x = PAD + (i / (history.length - 1)) * (W - PAD * 2);
@@ -113,13 +117,91 @@ const CpuSparkline = ({ history }) => {
     }),
     `${W - PAD},${H - PAD}`,
   ].join(" ");
+
+  const last = history[history.length - 1];
+
+  const color =
+    last > 80
+      ? "#ff5f56"
+      : last > 60
+      ? "#ffbd2e"
+      : "#4da3ff";
+
+  const lastX = W - PAD;
+  const lastY = H - PAD - (last / max) * (H - PAD * 2);
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <svg width={W} height={H} style={{ flexShrink: 0 }}>
-        <polygon points={fillPts} fill={color} fillOpacity={0.12} />
-        <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+    <div style={{ marginTop: 16 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 8,
+          fontSize: 12,
+          color: "var(--color-text-secondary)",
+        }}
+      >
+        <span>CPU activity</span>
+        <span>60s</span>
+      </div>
+
+      <svg width={W} height={H} style={{ width: "100%", overflow: "visible" }}>
+        <defs>
+          <linearGradient id="cpuFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        <line x1="0" y1="25%" x2="100%" y2="25%" stroke="rgba(255,255,255,0.04)" />
+        <line x1="0" y1="50%" x2="100%" y2="50%" stroke="rgba(255,255,255,0.04)" />
+        <line x1="0" y1="75%" x2="100%" y2="75%" stroke="rgba(255,255,255,0.04)" />
+
+        <polyline
+          points={points}
+          fill="none"
+          stroke={color}
+          strokeWidth="6"
+          opacity="0.12"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ transition: "all 180ms ease-out" }}
+        />
+
+        <polygon
+          points={area}
+          fill="url(#cpuFill)"
+          style={{ transition: "all 180ms ease-out" }}
+        />
+
+        <polyline
+          points={points}
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ transition: "all 180ms ease-out" }}
+        />
+
+        <circle
+          cx={lastX}
+          cy={lastY}
+          r="4"
+          fill={color}
+          style={{ transition: "all 180ms ease-out" }}
+        />
+
+        <circle
+          cx={lastX}
+          cy={lastY}
+          r="10"
+          fill={color}
+          opacity="0.15"
+          style={{ transition: "all 180ms ease-out" }}
+        />
       </svg>
-      <span style={{ fontSize: 11, color: "var(--color-text-secondary)", whiteSpace: "nowrap" }}>60s</span>
     </div>
   );
 };

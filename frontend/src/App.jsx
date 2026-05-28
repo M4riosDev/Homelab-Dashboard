@@ -304,14 +304,15 @@ const ActionBtn = ({ icon, label, onClick, loading, danger, success }) => (
       border: `0.5px solid ${danger ? "var(--color-border-danger)" : success ? "var(--color-border-success)" : "var(--color-border-secondary)"}`,
       borderRadius: "var(--border-radius-md)",
       background: "transparent",
-      padding: "5px 7px",
+      padding: "5px 10px",
       cursor: loading ? "wait" : "pointer",
       color: danger ? "var(--color-text-danger)" : success ? "var(--color-text-success)" : "var(--color-text-secondary)",
       opacity: loading ? 0.5 : 1,
-      display: "flex", alignItems: "center",
+      display: "flex", alignItems: "center", gap: 5, fontSize: 12,
     }}
   >
-    <i className={`ti ${loading ? "ti-loader" : icon}`} style={{ fontSize: 15 }} aria-hidden="true" />
+    <i className={`ti ${loading ? "ti-loader" : icon}`} style={{ fontSize: 14 }} aria-hidden="true" />
+    {label}
   </button>
 );
 

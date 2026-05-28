@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "@tabler/icons-webfont": "^3.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.0",

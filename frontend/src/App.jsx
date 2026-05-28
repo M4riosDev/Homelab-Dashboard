@@ -10,6 +10,17 @@ const useServerData = () => {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [cpuHistory, setCpuHistory] = useState([]);
 
+  useEffect(() => {
+    fetch(`${API_BASE}/api/cpu-history`)
+      .then(r => r.json())
+      .then(history => {
+        if (Array.isArray(history) && history.length > 0) {
+          setCpuHistory(history.map(p => p.v));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const fetchData = useCallback(async () => {
     try {
       const [sysRes, dockerRes] = await Promise.all([
@@ -27,10 +38,8 @@ const useServerData = () => {
       });
     } catch (e) {
       setError("Cannot connect to backend — showing demo data");
-      if (!data) {
-        setData(getMockData());
-        setLastUpdated(new Date());
-      }
+      setData(d => d || getMockData());
+      setLastUpdated(new Date());
     } finally {
       setLoading(false);
     }
@@ -41,6 +50,12 @@ const useServerData = () => {
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   return { data, loading, error, refetch: fetchData, lastUpdated, cpuHistory };
 };
@@ -491,6 +506,195 @@ const LogsTab = () => {
   );
 };
 
+const SHORTCUT_ACTIONS = [
+  { value: "restart",       label: "restart",               needsTarget: true },
+  { value: "stop",          label: "stop",                  needsTarget: true },
+  { value: "start",         label: "start",                 needsTarget: true },
+  { value: "logs",          label: "logs",                  needsTarget: true,  hasLines: true },
+  { value: "pull",          label: "pull (update image)",   needsTarget: true },
+  { value: "stats",         label: "stats",                 needsTarget: false },
+  { value: "prune",         label: "system prune",          needsTarget: false },
+  { value: "prune-images",  label: "prune images",          needsTarget: false },
+  { value: "watchtower",    label: "watchtower (update all)", needsTarget: false },
+  { value: "custom",        label: "custom…",               needsTarget: false },
+];
+
+function buildCommand(action, target, lines, custom) {
+  switch (action) {
+    case "restart":       return `docker restart ${target}`;
+    case "stop":          return `docker stop ${target}`;
+    case "start":         return `docker start ${target}`;
+    case "logs":          return `docker logs ${target} --tail ${lines}`;
+    case "pull":          return `docker pull $(docker inspect --format='{{.Config.Image}}' ${target})`;
+    case "stats":         return target ? `docker stats ${target} --no-stream` : "docker stats --no-stream";
+    case "prune":         return "docker system prune -f";
+    case "prune-images":  return "docker image prune -af";
+    case "watchtower":    return "docker run --rm -e DOCKER_API_VERSION=1.40 -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --cleanup --run-once";
+    case "custom":        return custom;
+    default:              return "";
+  }
+}
+
+const ShortcutsTab = ({ containers }) => {
+  const [action, setAction] = useState("restart");
+  const [target, setTarget] = useState("");
+  const [lines, setLines] = useState("100");
+  const [custom, setCustom] = useState("");
+  const [name, setName] = useState("");
+  const [shortcuts, setShortcuts] = useState([]);
+  const [output, setOutput] = useState(null);
+  const [running, setRunning] = useState(null);
+
+  const actionCfg = SHORTCUT_ACTIONS.find(a => a.value === action);
+  const cmd = buildCommand(action, target, lines, custom);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/shortcuts`)
+      .then(r => r.json())
+      .then(setShortcuts)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (actionCfg?.needsTarget && containers.length > 0 && !target) {
+      setTarget(containers[0].name);
+    }
+    if (!actionCfg?.needsTarget) setTarget("");
+  }, [action, containers]);
+
+  const save = async () => {
+    const n = name.trim() || `${action}${target ? " " + target : ""}`;
+    const sc = { id: Date.now(), name: n, action, target, lines, custom, cmd };
+    const res = await fetch(`${API_BASE}/api/shortcuts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sc),
+    }).then(r => r.json()).catch(() => null);
+    if (res) { setShortcuts(res); setName(""); }
+  };
+
+  const remove = async (id) => {
+    const res = await fetch(`${API_BASE}/api/shortcuts/${id}`, { method: "DELETE" })
+      .then(r => r.json()).catch(() => null);
+    if (res) setShortcuts(res);
+  };
+
+  const run = async (sc) => {
+    setRunning(sc.id);
+    setOutput({ id: sc.id, name: sc.name, text: "Running…" });
+    try {
+      const res = await fetch(`${API_BASE}/api/shortcuts/${sc.id}/run`, { method: "POST" })
+        .then(r => r.json());
+      setOutput({ id: sc.id, name: sc.name, text: res.output || res.error || "Done" });
+    } catch {
+      setOutput({ id: sc.id, name: sc.name, text: "Error — backend not reachable" });
+    }
+    setRunning(null);
+  };
+
+  const selectStyle = { fontSize: 13, padding: "6px 10px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", cursor: "pointer" };
+  const btnStyle = (danger) => ({ border: `0.5px solid ${danger ? "var(--color-border-danger)" : "var(--color-border-secondary)"}`, background: "transparent", borderRadius: "var(--border-radius-md)", padding: "5px 7px", cursor: "pointer", color: danger ? "var(--color-text-danger)" : "var(--color-text-secondary)", display: "flex", alignItems: "center" });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+
+      {/* Builder */}
+      <div style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
+        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: "0.75rem" }}>
+          <i className="ti ti-plus" style={{ fontSize: 14, marginRight: 6, verticalAlign: "-2px" }} aria-hidden="true" />
+          New shortcut
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Action</span>
+            <select style={selectStyle} value={action} onChange={e => setAction(e.target.value)}>
+              {SHORTCUT_ACTIONS.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
+            </select>
+          </div>
+
+          {actionCfg?.needsTarget && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Container</span>
+              <select style={selectStyle} value={target} onChange={e => setTarget(e.target.value)}>
+                {containers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
+          )}
+
+          {actionCfg?.hasLines && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Lines</span>
+              <select style={selectStyle} value={lines} onChange={e => setLines(e.target.value)}>
+                {["50","100","200","500"].map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+          )}
+
+          {action === "custom" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 200 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Command</span>
+              <input style={{ fontFamily: "var(--font-mono)", fontSize: 12 }} placeholder="docker run --rm ..." value={custom} onChange={e => setCustom(e.target.value)} />
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginTop: "0.75rem", background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "8px 12px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--color-text-primary)", wordBreak: "break-all" }}>
+          {cmd || "—"}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: "0.75rem", alignItems: "center" }}>
+          <input placeholder="Shortcut name (optional)" value={name} onChange={e => setName(e.target.value)} style={{ flex: 1, fontSize: 13 }} />
+          <button onClick={save} disabled={!cmd} style={{ border: "0.5px solid var(--color-border-primary)", background: "transparent", borderRadius: "var(--border-radius-md)", padding: "6px 14px", cursor: cmd ? "pointer" : "not-allowed", fontSize: 13, color: "var(--color-text-primary)", display: "flex", alignItems: "center", gap: 6, opacity: cmd ? 1 : 0.4, whiteSpace: "nowrap" }}>
+            <i className="ti ti-device-floppy" style={{ fontSize: 14 }} aria-hidden="true" /> Save
+          </button>
+        </div>
+      </div>
+
+      {/* Saved shortcuts */}
+      <div style={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem" }}>
+        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: "0.75rem" }}>
+          <i className="ti ti-terminal" style={{ fontSize: 14, marginRight: 6, verticalAlign: "-2px" }} aria-hidden="true" />
+          Saved shortcuts
+        </div>
+
+        {shortcuts.length === 0 ? (
+          <div style={{ fontSize: 13, color: "var(--color-text-secondary)", padding: "1rem 0" }}>No shortcuts yet — create one above.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {shortcuts.map(sc => (
+              <div key={sc.id}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                  <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: "var(--border-radius-md)", background: sc.target ? "var(--color-background-info)" : "var(--color-background-warning)", color: sc.target ? "var(--color-text-info)" : "var(--color-text-warning)", whiteSpace: "nowrap" }}>
+                    {sc.target || "system"}
+                  </span>
+                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1 }}>{sc.name}</span>
+                  <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 240 }}>{sc.cmd}</span>
+                  <button
+                    onClick={() => run(sc)}
+                    disabled={running === sc.id}
+                    style={{ border: `0.5px solid ${running === sc.id ? "var(--color-border-success)" : "var(--color-border-secondary)"}`, background: "transparent", borderRadius: "var(--border-radius-md)", padding: "4px 10px", cursor: "pointer", fontSize: 12, color: running === sc.id ? "var(--color-text-success)" : "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                    <i className={`ti ${running === sc.id ? "ti-loader" : "ti-player-play"}`} style={{ fontSize: 12 }} aria-hidden="true" />
+                    {running === sc.id ? "Running…" : "Run"}
+                  </button>
+                  <button onClick={() => remove(sc.id)} style={btnStyle(true)}>
+                    <i className="ti ti-trash" style={{ fontSize: 13 }} aria-hidden="true" />
+                  </button>
+                </div>
+                {output?.id === sc.id && (
+                  <div style={{ margin: "6px 0 4px", background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "8px 12px", fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.6 }}>
+                    {output.text}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const { data, loading, error, refetch, lastUpdated, cpuHistory } = useServerData();
   const [tab, setTab] = useState("overview");
@@ -546,7 +750,7 @@ export default function App() {
           </h2>
           <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 4 }}>
             {error ? <span style={{ color: "var(--color-text-warning)" }}><i className="ti ti-alert-circle" style={{ fontSize: 13, marginRight: 4, verticalAlign: "-1px" }} />{error}</span>
-              : lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : ""}
+              : lastUpdated ? `Updated ${Math.round((Date.now() - lastUpdated) / 1000)}s ago` : ""}
           </div>
         </div>
         <button onClick={refetch} style={{ border: "0.5px solid var(--color-border-secondary)", background: "transparent", borderRadius: "var(--border-radius-md)", padding: "6px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--color-text-secondary)" }}>
@@ -555,7 +759,7 @@ export default function App() {
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: "1.5rem", borderBottom: "0.5px solid var(--color-border-tertiary)", paddingBottom: "0.5rem" }}>
-        {["overview", "containers", "storage", "network", "logs"].map(t => (
+        {["overview", "containers", "storage", "network", "logs", "shortcuts"].map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
             border: "none", background: tab === t ? "var(--color-background-secondary)" : "transparent",
             borderRadius: "var(--border-radius-md)", padding: "6px 14px", cursor: "pointer",
@@ -719,6 +923,7 @@ export default function App() {
       )}
 
       {tab === "logs" && <LogsTab />}
+      {tab === "shortcuts" && <ShortcutsTab containers={containers} />}
     </div>
   );
 }

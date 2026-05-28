@@ -33,6 +33,20 @@ setInterval(() => {
   }
 }, 5 * 60_000);
 
+const CPU_HISTORY_MAX = 180; // 15 minutes at 5s intervals
+const cpuHistory = []; // [{ t: timestamp_ms, v: percent }, ...]
+
+async function sampleCpu() {
+  try { 
+    const load = await si.currentLoad();
+    cpuHistory.push({ t: Date.now(), v: Math.round(load.currentLoad) });
+    if (cpuHistory.length > CPU_HISTORY_MAX) cpuHistory.shift();
+  } catch (_) {}
+}
+
+sampleCpu();
+setInterval(sampleCpu, 5000);
+
 const SKIP_MOUNTS = [
   "/etc/resolv.conf", "/etc/hostname", "/etc/hosts",
   "/proc", "/sys", "/dev", "/run", "/snap",
@@ -54,6 +68,10 @@ async function getContainerStats(container, timeoutMs = 8000) {
   });
 }
 
+
+app.get("/api/cpu-history", (req, res) => {
+  res.json(cpuHistory);
+});
 
 app.get("/api/system", async (req, res) => {
   try {
@@ -298,6 +316,54 @@ app.get("/api/logs/docker", async (req, res) => {
   } catch (err) {
     res.json({ logs: "No Docker events available" });
   }
+});
+
+const fs = require("fs");
+const SHORTCUTS_FILE = process.env.SHORTCUTS_FILE || "/data/shortcuts.json";
+
+let shortcuts = [];
+try {
+  if (fs.existsSync(SHORTCUTS_FILE)) {
+    shortcuts = JSON.parse(fs.readFileSync(SHORTCUTS_FILE, "utf8"));
+  }
+} catch (_) {}
+
+function saveShortcuts() {
+  try {
+    fs.mkdirSync(require("path").dirname(SHORTCUTS_FILE), { recursive: true });
+    fs.writeFileSync(SHORTCUTS_FILE, JSON.stringify(shortcuts, null, 2));
+  } catch (_) {}
+}
+
+app.get("/api/shortcuts", (req, res) => res.json(shortcuts));
+
+app.post("/api/shortcuts", (req, res) => {
+  const sc = req.body;
+  if (!sc || !sc.cmd) return res.status(400).json({ error: "Missing cmd" });
+  shortcuts.push(sc);
+  saveShortcuts();
+  res.json(shortcuts);
+});
+
+app.delete("/api/shortcuts/:id", (req, res) => {
+  shortcuts = shortcuts.filter(s => String(s.id) !== String(req.params.id));
+  saveShortcuts();
+  res.json(shortcuts);
+});
+
+app.post("/api/shortcuts/:id/run", async (req, res) => {
+  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
+  if (!checkRateLimit(clientIp)) {
+    return res.status(429).json({ error: "Too many requests — slow down." });
+  }
+
+  const sc = shortcuts.find(s => String(s.id) === String(req.params.id));
+  if (!sc) return res.status(404).json({ error: "Shortcut not found" });
+
+  const { exec } = require("child_process");
+  exec(sc.cmd, { timeout: 60000, shell: true }, (err, stdout, stderr) => {
+    res.json({ output: (stdout + stderr).trim() || (err?.message || "Done") });
+  });
 });
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));

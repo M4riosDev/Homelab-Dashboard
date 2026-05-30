@@ -3,6 +3,145 @@ import { useState, useEffect, useCallback, useRef } from "react";
 const API_BASE = "";
 const CPU_HISTORY_MAX = 180;
 
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+function getToken() { return localStorage.getItem("hl_token"); }
+function setToken(t) { localStorage.setItem("hl_token", t); }
+function clearToken() { localStorage.removeItem("hl_token"); }
+
+async function authFetch(url, opts = {}) {
+  const token = getToken();
+  const res = await fetch(url, {
+    ...opts,
+    headers: {
+      ...(opts.headers || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "Content-Type": "application/json",
+    },
+    body: opts.body,
+  });
+  if (res.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+  return res;
+}
+
+// ─── Auth Screen ──────────────────────────────────────────────────────────────
+
+function AuthScreen({ onAuth }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    setError("");
+    if (!username.trim() || !password.trim()) { setError("Username and password are required"); return; }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username.trim().toLowerCase(), password }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setError(json.error || "Invalid username or password"); return; }
+      setToken(json.token);
+      onAuth(json.user);
+    } catch {
+      setError("Cannot connect to backend");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKey = (e) => { if (e.key === "Enter") submit(); };
+
+  return (
+    <div style={{
+      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: "var(--font-sans)", padding: "1rem",
+      background: "var(--color-background-secondary)",
+    }}>
+      <div style={{
+        width: "100%", maxWidth: 340,
+        background: "var(--color-background-primary)",
+        border: "0.5px solid var(--color-border-tertiary)",
+        borderRadius: "var(--border-radius-lg)",
+        padding: "2rem",
+      }}>
+        <div style={{ marginBottom: "1.75rem" }}>
+          <h1 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Homelab Dashboard</h1>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--color-text-secondary)" }}>Sign in to continue</p>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-secondary)", display: "block", marginBottom: 4 }}>Username</label>
+            <input
+              placeholder="username"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              onKeyDown={handleKey}
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect="off"
+              style={{ width: "100%", boxSizing: "border-box" }}
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-secondary)", display: "block", marginBottom: 4 }}>Password</label>
+            <div style={{ position: "relative" }}>
+              <input
+                type={showPw ? "text" : "password"}
+                placeholder="••••••••"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                onKeyDown={handleKey}
+                style={{ width: "100%", paddingRight: 40, boxSizing: "border-box" }}
+              />
+              <button onClick={() => setShowPw(s => !s)}
+                style={{
+                  position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+                  border: "none", background: "transparent", cursor: "pointer",
+                  color: "var(--color-text-secondary)", fontSize: 15, padding: 0, lineHeight: 1,
+                }}>
+                <i className={`ti ${showPw ? "ti-eye-off" : "ti-eye"}`} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {error && (
+          <div style={{
+            marginTop: "0.75rem", padding: "8px 12px", borderRadius: "var(--border-radius-md)",
+            background: "var(--color-background-danger)", color: "var(--color-text-danger)", fontSize: 13,
+          }}>
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={submit}
+          disabled={loading}
+          style={{
+            marginTop: "1.25rem", width: "100%", padding: "9px 0",
+            background: "var(--accent)", color: "#fff", border: "none",
+            borderRadius: "var(--border-radius-md)", fontWeight: 500, fontSize: 14,
+            cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          }}>
+          {loading && <i className="ti ti-loader" style={{ fontSize: 14 }} />}
+          Sign in
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const useServerData = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -11,7 +150,7 @@ const useServerData = () => {
   const [cpuHistory, setCpuHistory] = useState([]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/cpu-history`)
+    authFetch(`${API_BASE}/api/cpu-history`)
       .then(r => r.json())
       .then(history => {
         if (Array.isArray(history) && history.length > 0) {
@@ -24,12 +163,12 @@ const useServerData = () => {
   const fetchData = useCallback(async () => {
     try {
       const [sysRes, dockerRes] = await Promise.all([
-        fetch(`${API_BASE}/api/system`),
-        fetch(`${API_BASE}/api/docker`),
+        authFetch(`${API_BASE}/api/system`),
+        authFetch(`${API_BASE}/api/docker`),
       ]);
       const sys = await sysRes.json();
       const docker = await dockerRes.json();
-      setData({ system: sys, containers: docker });
+      setData({ system: sys, containers: Array.isArray(docker) ? docker : [] });
       setLastUpdated(new Date());
       setError(null);
       setCpuHistory(prev => {
@@ -103,6 +242,31 @@ const GaugeBar = ({ value, max, color = "var(--accent)" }) => {
   return (
     <div style={{ height: 6, background: "var(--color-border-tertiary)", borderRadius: 3, overflow: "hidden" }}>
       <div style={{ height: "100%", width: `${pct}%`, background: clr, borderRadius: 3, transition: "width 0.6s ease" }} />
+    </div>
+  );
+};
+
+const CpuPerCore = ({ cores = [] }) => {
+  if (!cores.length) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+      {cores.map((c, i) => {
+        const pct = Math.min(100, Math.max(0, c));
+        const color = pct > 85 ? "#E24B4A" : pct > 65 ? "#EF9F27" : "#4da3ff";
+        return (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, width: 34, color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)" }}>
+              CPU{i}
+            </span>
+            <div style={{ flex: 1, height: 6, background: "var(--color-border-tertiary)", borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ width: `${pct}%`, height: "100%", background: color, transition: "width 0.3s ease" }} />
+            </div>
+            <span style={{ fontSize: 11, width: 40, textAlign: "right", color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)" }}>
+              {pct.toFixed(0)}%
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 };
@@ -378,7 +542,7 @@ const LogsTab = () => {
   const [selectedContainer, setSelectedContainer] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/docker`)
+    authFetch(`${API_BASE}/api/docker`)
       .then(r => r.json())
       .then(setContainers)
       .catch(() => {});
@@ -389,15 +553,15 @@ const LogsTab = () => {
     setLogs("");
     try {
       if (logType === "system") {
-        const r = await fetch(`${API_BASE}/api/logs/system`);
+        const r = await authFetch(`${API_BASE}/api/logs/system`);
         const j = await r.json();
         setLogs(j.logs || "No logs available");
       } else if (logType === "docker-events") {
-        const r = await fetch(`${API_BASE}/api/logs/docker`);
+        const r = await authFetch(`${API_BASE}/api/logs/docker`);
         const j = await r.json();
         setLogs(j.logs || "No Docker events available");
       } else if (logType === "container" && selectedContainer) {
-        const r = await fetch(`${API_BASE}/api/docker/${selectedContainer}/logs`, { method: "POST" });
+        const r = await authFetch(`${API_BASE}/api/docker/${selectedContainer}/logs`, { method: "POST" });
         const j = await r.json();
         setLogs(j.logs || "No logs available");
       }
@@ -550,7 +714,7 @@ const ShortcutsTab = ({ containers }) => {
   const cmd = buildCommand(action, target, lines, custom);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/shortcuts`)
+    authFetch(`${API_BASE}/api/shortcuts`)
       .then(r => r.json())
       .then(setShortcuts)
       .catch(() => {});
@@ -566,7 +730,7 @@ const ShortcutsTab = ({ containers }) => {
   const save = async () => {
     const n = name.trim() || `${action}${target ? " " + target : ""}`;
     const sc = { id: Date.now(), name: n, action, target, lines, custom, cmd };
-    const res = await fetch(`${API_BASE}/api/shortcuts`, {
+    const res = await authFetch(`${API_BASE}/api/shortcuts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sc),
@@ -575,7 +739,7 @@ const ShortcutsTab = ({ containers }) => {
   };
 
   const remove = async (id) => {
-    const res = await fetch(`${API_BASE}/api/shortcuts/${id}`, { method: "DELETE" })
+    const res = await authFetch(`${API_BASE}/api/shortcuts/${id}`, { method: "DELETE" })
       .then(r => r.json()).catch(() => null);
     if (res) setShortcuts(res);
   };
@@ -584,7 +748,7 @@ const ShortcutsTab = ({ containers }) => {
     setRunning(sc.id);
     setOutput({ id: sc.id, name: sc.name, text: "Running…" });
     try {
-      const res = await fetch(`${API_BASE}/api/shortcuts/${sc.id}/run`, { method: "POST" })
+      const res = await authFetch(`${API_BASE}/api/shortcuts/${sc.id}/run`, { method: "POST" })
         .then(r => r.json());
       setOutput({ id: sc.id, name: sc.name, text: res.output || res.error || "Done" });
     } catch {
@@ -696,7 +860,7 @@ const ShortcutsTab = ({ containers }) => {
   );
 };
 
-export default function App() {
+function Dashboard({ user, onLogout }) {
   const { data, loading, error, refetch, lastUpdated, cpuHistory } = useServerData();
   const [tab, setTab] = useState("overview");
   const [filter, setFilter] = useState("all");
@@ -705,7 +869,7 @@ export default function App() {
 
   const handleAction = async (id, action, name) => {
     try {
-      const res = await fetch(`${API_BASE}/api/docker/${id}/${action}`, { method: "POST" });
+      const res = await authFetch(`${API_BASE}/api/docker/${id}/${action}`, { method: "POST" });
       const json = await res.json();
       if (action === "logs") {
         setModal({ title: `Logs — ${name || id.slice(0, 12)}`, content: json.logs });
@@ -754,9 +918,18 @@ export default function App() {
               : lastUpdated ? `Updated ${Math.round((Date.now() - lastUpdated) / 1000)}s ago` : ""}
           </div>
         </div>
-        <button onClick={refetch} style={{ border: "0.5px solid var(--color-border-secondary)", background: "transparent", borderRadius: "var(--border-radius-md)", padding: "6px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--color-text-secondary)" }}>
-          <i className="ti ti-refresh" style={{ fontSize: 14 }} aria-hidden="true" /> Refresh
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={refetch} style={{ border: "0.5px solid var(--color-border-secondary)", background: "transparent", borderRadius: "var(--border-radius-md)", padding: "6px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--color-text-secondary)" }}>
+            <i className="ti ti-refresh" style={{ fontSize: 14 }} aria-hidden="true" /> Refresh
+          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-tertiary)", fontSize: 13, color: "var(--color-text-secondary)" }}>
+            <i className="ti ti-user-circle" style={{ fontSize: 14 }} />
+            <span style={{ maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user?.name || user?.username}</span>
+          </div>
+          <button onClick={onLogout} style={{ border: "0.5px solid var(--color-border-secondary)", background: "transparent", borderRadius: "var(--border-radius-md)", padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "var(--color-text-secondary)" }} title="Sign out">
+            <i className="ti ti-logout" style={{ fontSize: 14 }} /> Sign out
+          </button>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: "1.5rem", borderBottom: "0.5px solid var(--color-border-tertiary)", paddingBottom: "0.5rem" }}>
@@ -799,8 +972,9 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                {sys.cpu.perCore?.length > 0 && <CpuPerCore cores={sys.cpu.perCore} />}
               </ResourceRow>
-              <ResourceRow label="RAM" value={sys.ram.used} max={sys.ram.total} sub={`${fmt.bytes(sys.ram.free)} free`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(sys.ram.total)}`} />
+              <ResourceRow label="RAM" value={sys.ram.used} max={sys.ram.total} sub={`${fmt.bytes(sys.ram.available)} available`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(sys.ram.total)}`} />
               {sys.disks.map((d, i) => (
                 <ResourceRow key={i} label={`Disk ${d.mountpoint}`} value={d.used} max={d.total} sub={`${fmt.bytes(d.free)} free · ${d.device}`} fmt={v => `${fmt.bytes(v)} / ${fmt.bytes(d.total)}`} />
               ))}
@@ -942,3 +1116,25 @@ const ResourceRow = ({ label, value, max, sub, fmt: fmtFn, children }) => (
     {children && <div style={{ marginTop: 10 }}>{children}</div>}
   </div>
 );
+
+export default function App() {
+  const [user, setUser] = useState(() => {
+    const token = getToken();
+    if (!token) return null;
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      if (payload.exp && payload.exp * 1000 < Date.now()) { clearToken(); return null; }
+      return { id: payload.id, name: payload.name, username: payload.username };
+    } catch { clearToken(); return null; }
+  });
+
+  const handleAuth = (u) => setUser(u);
+
+  const handleLogout = () => {
+    clearToken();
+    setUser(null);
+  };
+
+  if (!user) return <AuthScreen onAuth={handleAuth} />;
+  return <Dashboard user={user} onLogout={handleLogout} />;
+}
